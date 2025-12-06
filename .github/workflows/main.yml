@@ -6,14 +6,13 @@ on:
       - main
 
 env:
-  AWS_REGION: ap-south-1               # apna region
-  ECR_REPOSITORY: devops-ci-cd-app     # ECR repo name
+  AWS_REGION: ap-south-1              # apna region
+  ECR_REPOSITORY: devops-ci-cd-app    # ECR repo name
+  IMAGE_TAG: ${{ github.sha }}        # har commit ke liye unique tag
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ github.sha }}     # <--- HAR BUILD KA UNIQUE TAG
 
     steps:
       # 1. Code checkout
@@ -53,7 +52,8 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       # 8. Image push to ECR
       - name: Push image to Amazon ECR
@@ -62,12 +62,9 @@ jobs:
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-
   deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
-    env:
-      IMAGE_TAG: ${{ github.sha }}     # <--- Yahi same tag use hoga
 
     steps:
       - name: Configure AWS credentials
@@ -77,29 +74,31 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
+      - name: Login to Amazon ECR (for registry URL)
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Deploy on EC2 using SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ secrets.EC2_HOST }}     # e.g. 13.201.129.197
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
             ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
+            IMAGE_TAG=${IMAGE_TAG}
 
-            # ECR login on EC2
+            echo "Logging in to ECR from EC2..."
             aws ecr get-login-password --region ${AWS_REGION} \
               | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            # Latest build ka image (sha tag) pull karo
+            echo "Pulling image..."
             docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-            # Purana container delete (agar exist karta ho)
+            echo "Stopping old container (if any)..."
             docker rm -f devops-ci-cd-app || true
 
-            # Naya container run
+            echo "Starting new container..."
             docker run -d --name devops-ci-cd-app -p 80:3000 \
               $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
