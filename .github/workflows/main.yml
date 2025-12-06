@@ -5,16 +5,16 @@ on:
     branches:
       - main
 
-# Common env (yaha secrets use kar sakte hain)
+# Common env for all jobs
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  AWS_REGION: ${{ secrets.AWS_REGION }}          # e.g. ap-south-1
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}  # e.g. devops-ci-cd-app
   IMAGE_TAG: latest
 
 jobs:
-  # ---------------------------------------------------
-  # 1) Build image & push to AWS ECR
-  # ---------------------------------------------------
+  # ------------------------------------------------
+  # 1) Build and push image to AWS ECR
+  # ------------------------------------------------
   build-and-push:
     runs-on: ubuntu-latest
 
@@ -36,67 +36,53 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # ---- yahi step dono errors fix karega ----
       - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      # 👇 Yahi step tumhare dono errors fix karega:
-      # - docker build normal command se
-      # - ECR registry ko env me leke, YAML expression error nahi aayega
-            - name: Disable buildx
-        run: docker buildx rm default || true
-
-      - name: Build, tag and push Docker image to Amazon ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          echo "Registry   : $ECR_REGISTRY"
-          echo "Repository : $ECR_REPOSITORY"
-          echo "Image tag  : $IMAGE_TAG"
+          aws ecr get-login-password --region "$AWS_REGION" \
+          | docker login --username AWS --password-stdin "${{ secrets.ECR_REGISTRY }}"
 
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
 
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: Push Docker image to ECR
+        run: |
+          docker push \
+            ${{ secrets.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
 
-
-  # ---------------------------------------------------
-  # 2) Deploy to EC2 (sirf tab chalega jab build-and-push success ho)
-  # ---------------------------------------------------
+  # ------------------------------------------------
+  # 2) Deploy latest image on EC2
+  # ------------------------------------------------
   deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v0.1.10
+      - name: SSH into EC2 and deploy container
+        uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user          # Amazon Linux / default username
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: 22
+          host: ${{ secrets.EC2_HOST }}          # e.g. 13.x.x.x
+          username: ${{ secrets.EC2_USER }}      # e.g. ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}        # private key content
           script: |
-            # AWS region set karo
             AWS_REGION=${{ env.AWS_REGION }}
-
-            # Yaha apna AWS account id daal do (screenshot me jo tha):
-            ACCOUNT_ID=225220763539
-            ECR_REGISTRY=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-            ECR_REPOSITORY=${{ env.ECR_REPOSITORY }}
+            ECR_REGISTRY=${{ secrets.ECR_REGISTRY }}
+            ECR_REPO=${{ env.ECR_REPOSITORY }}
             IMAGE_TAG=${{ env.IMAGE_TAG }}
 
-            echo "Logging in to ECR inside EC2..."
-            aws ecr get-login-password --region $AWS_REGION \
-              | docker login --username AWS --password-stdin $ECR_REGISTRY
+            # EC2 pe IAM Role laga hua hai, isliye yahi login kaafi hai
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-            echo "Pulling latest image..."
-            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            docker pull "$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
 
-            echo "Stopping old container (if exists)..."
+            # Purana container band + delete
             docker stop devops-ci-cd-app || true
             docker rm devops-ci-cd-app || true
 
-            echo "Starting new container..."
-            docker run -d -p 80:3000 --name devops-ci-cd-app \
-              $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            # Naya container run
+            docker run -d --name devops-ci-cd-app -p 3000:3000 \
+              "$ECR_REGISTRY/$ECR_REPO:$IMAGE_TAG"
