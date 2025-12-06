@@ -52,7 +52,6 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
     deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
