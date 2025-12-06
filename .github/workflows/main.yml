@@ -53,7 +53,7 @@ jobs:
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-  deploy-to-ec2:
+    deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
 
@@ -75,19 +75,22 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          # <<< IMPORTANT: yeh env vars EC2 par bhi available honge
+          envs: AWS_REGION,ECR_REPOSITORY,IMAGE_TAG
           script: |
+            echo "Logging in to ECR from EC2 ..."
             ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
 
-            # ECR login on EC2
-            aws ecr get-login-password --region ${AWS_REGION} \
-              | docker login --username AWS --password-stdin $ECR_REGISTRY
+            # ECR login EC2 ke andar
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-            # Latest build ka image pull (is run ka unique tag)
-            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            echo "Pull latest image from ECR ..."
+            docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-            # Purana container delete (agar exist karta ho)
+            echo "Remove old container (if exists) ..."
             docker rm -f devops-ci-cd-app || true
 
-            # Naya container run
+            echo "Run new container ..."
             docker run -d --name devops-ci-cd-app -p 80:3000 \
-              $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+              "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
