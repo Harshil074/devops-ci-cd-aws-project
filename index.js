@@ -12,7 +12,7 @@ app.use((req, res, next) => {
 
 // Home route
 app.get('/', (req, res) => {
-  res.send('DevOps CI/CD Demo App is running 🚀');
+  res.send("CI/CD working!");
 });
 
 // Health-check route (monitoring / load balancer ke liye)
