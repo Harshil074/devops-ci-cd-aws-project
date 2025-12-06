@@ -61,8 +61,7 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-  deploy-to-ec2:
+    deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
 
@@ -74,24 +73,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR (for registry URL)
+      - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Deploy on EC2 using SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}     # e.g. 13.201.129.197
+          host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            set -e
             ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
-            IMAGE_TAG=${IMAGE_TAG}
+            REGION=${{ env.AWS_REGION }}
 
             echo "Logging in to ECR from EC2..."
-            aws ecr get-login-password --region ${AWS_REGION} \
-              | docker login --username AWS --password-stdin $ECR_REGISTRY
+            aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
 
             echo "Pulling image..."
             docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
