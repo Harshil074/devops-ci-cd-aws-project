@@ -5,13 +5,16 @@ on:
     branches:
       - main
 
+# Ye env dono jobs (build + deploy) ko milenge
 env:
-  AWS_REGION: ap-south-1              # <- apna region
-  ECR_REPOSITORY: devops-ci-cd-app    # <- ECR repo name
-  IMAGE_TAG: latest
+  AWS_REGION: ap-south-1                    # <- tumhara region
+  ECR_REPOSITORY: devops-ci-cd-app          # <- ECR repo name
+  IMAGE_TAG: ${{ github.sha }}              # <- har commit ka unique tag (NO 'latest')
 
 jobs:
-  # ------------------------ BUILD + PUSH ------------------------
+  # ---------------------------------------------------------
+  # 1) Build + Push image to ECR
+  # ---------------------------------------------------------
   build-and-push:
     runs-on: ubuntu-latest
 
@@ -46,7 +49,8 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       - name: Push image to Amazon ECR
         env:
@@ -54,20 +58,22 @@ jobs:
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-  # ------------------------ DEPLOY TO EC2 ------------------------
+  # ---------------------------------------------------------
+  # 2) Deploy image on EC2
+  # ---------------------------------------------------------
   deploy-to-ec2:
-    needs: build-and-push          # pehle build job khatam hoga
+    needs: build-and-push
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (for ECR login output)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
+      - name: Login to Amazon ECR (to get registry URL)
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
@@ -78,18 +84,22 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
+            REGION="${{ env.AWS_REGION }}"
+            ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+            ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
+            IMAGE_TAG="${{ env.IMAGE_TAG }}"
 
-            # ECR login on EC2
-            aws ecr get-login-password --region "${{ env.AWS_REGION }}" \
-              | docker login --username AWS --password-stdin $ECR_REGISTRY
+            echo "Logging into ECR from EC2..."
+            aws ecr get-login-password --region "$REGION" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-            # Latest image pull
-            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            echo "Pulling latest image for this commit..."
+            docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-            # Purana container delete (agar exist karta ho)
-            docker rm -f devops-ci-cd-app || true
+            echo "Stopping old container (if exists)..."
+            docker stop devops-ci-cd-app || true
+            docker rm devops-ci-cd-app || true
 
-            # Naya container run
+            echo "Starting new container..."
             docker run -d --name devops-ci-cd-app -p 80:3000 \
-              $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+              "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
