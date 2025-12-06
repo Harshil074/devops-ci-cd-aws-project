@@ -44,6 +44,9 @@ jobs:
       # 👇 Yahi step tumhare dono errors fix karega:
       # - docker build normal command se
       # - ECR registry ko env me leke, YAML expression error nahi aayega
+            - name: Disable buildx
+        run: docker buildx rm default || true
+
       - name: Build, tag and push Docker image to Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -54,11 +57,10 @@ jobs:
           echo "Repository : $ECR_REPOSITORY"
           echo "Image tag  : $IMAGE_TAG"
 
-          # Build Docker image
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
 
-          # Push image to ECR
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
 
   # ---------------------------------------------------
   # 2) Deploy to EC2 (sirf tab chalega jab build-and-push success ho)
