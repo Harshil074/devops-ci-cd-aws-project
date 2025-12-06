@@ -4,33 +4,33 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch: {}
 
 env:
-  AWS_REGION: ap-south-1              # <--- apna region
-  ECR_REPOSITORY: devops-ci-cd-app    # <--- ECR repo name
+  AWS_REGION: ap-south-1              # <- tumhara region
+  ECR_REPOSITORY: devops-ci-cd-app    # <- tumhara ECR repo name
   IMAGE_TAG: latest
 
+# ------------------ BUILD & PUSH IMAGE ------------------
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Code checkout
+      # 1) Code checkout
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Node.js setup
+      # 2) Node.js setup
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 16
 
-      # 3. Dependencies install
+      # 3) Dependencies
       - name: Install dependencies
         run: npm install
 
-      # 4. AWS credentials configure
+      # 4) AWS credentials configure (GitHub runner ke liye)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -38,36 +38,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 5. Login to Amazon ECR
+      # 5) ECR login (GitHub runner)
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 6. Docker image build
+      # 6) Docker image build
       - name: Build Docker image
         run: |
           docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
 
-      # 7. Tag image for ECR
+      # 7) Tag image for ECR
       - name: Tag image for Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      # 8. Push image to ECR
+      # 8) Push image to ECR
       - name: Push image to Amazon ECR
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+  # ------------------ DEPLOY ON EC2 ------------------
   deploy-to-ec2:
     needs: build-and-push
     runs-on: ubuntu-latest
 
     steps:
-      # 1. AWS credentials
+      # 1) AWS creds (GitHub runner, sirf ECR registry name nikalne ke liye)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -75,31 +77,32 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 2. Login to ECR (for registry URL output)
+      # 2) ECR login action (registry URL nikalne ke liye)
       - name: Login to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 3. SSH into EC2 and deploy
+      # 3) SSH se EC2 pe deploy
       - name: Deploy on EC2 using SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}       # 13.201.129.197 iske andar pada hai
+          host: ${{ secrets.EC2_HOST }}      # 13.201.129.197
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            # ECR registry URL jo upar action se aaya
             ECR_REGISTRY=${{ steps.ecr-login.outputs.registry }}
 
-            echo "Logging in to ECR from EC2..."
-            aws ecr get-login-password --region "$AWS_REGION" \
+            echo "Login to ECR from EC2..."
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
               | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-            echo "Pulling latest image..."
+            echo "Pull latest image..."
             docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-            echo "Removing old container (if exists)..."
+            echo "Remove old container if exists..."
             docker rm -f devops-ci-cd-app || true
 
-            echo "Starting new container..."
+            echo "Run new container..."
             docker run -d --name devops-ci-cd-app -p 80:3000 \
               "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
